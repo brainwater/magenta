@@ -10,6 +10,7 @@
 #include <ddk/protocol/pci.h>
 #include <hw/pci.h>
 
+#include <magenta/process.h>
 #include <magenta/syscalls.h>
 #include <magenta/types.h>
 #include <stdio.h>
@@ -178,16 +179,31 @@ static mx_status_t eth_bind(mx_driver_t* drv, mx_device_t* dev, void** cookie) {
     }
 
     // map iomem
-    uint64_t sz;
-    mx_handle_t h;
+    mx_pci_resource_t pci_res;
     void* io;
-    r = pci->map_mmio(dev, 0, MX_CACHE_POLICY_UNCACHED_DEVICE, &io, &sz, &h);
+
+    r = pci->get_bar(dev, 0, &pci_res);
     if (r != NO_ERROR) {
-        printf("eth: cannot map io %d\n", h);
+        printf("eth: error %d getting pci bar\n", r);
         goto fail;
     }
+
+    r = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_UNCACHED_DEVICE);
+    if (r != NO_ERROR) {
+        printf("eth: error %d setting bar cache policy\n", r);
+        goto fail;
+    }
+
+    r = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE, (uintptr_t*)&io);
+    if (r != NO_ERROR) {
+        printf("ahci: error %d mapping bar\n", r);
+        goto fail;
+    }
+
     edev->eth.iobase = (uintptr_t)io;
-    edev->ioh = h;
+    edev->ioh = pci_res.mmio_handle;
+
 
     if ((r = pci->enable_bus_master(dev, true)) < 0) {
         printf("eth: cannot enable bus master %d\n", r);
