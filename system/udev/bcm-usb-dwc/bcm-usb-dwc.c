@@ -507,9 +507,17 @@ static void do_dwc_iotxn_queue(dwc_usb_t* dwc, iotxn_t* txn) {
     }
 }
 
+size_t dwc_get_max_transfer_size(mx_device_t* device, uint32_t device_id, uint8_t ep_address);
+
 static void dwc_iotxn_queue(mx_device_t* hci_device, iotxn_t* txn) {
-    dwc_usb_t* dwc = dev_to_usb_dwc(hci_device);
-    do_dwc_iotxn_queue(dwc, txn);
+    usb_protocol_data_t* data = iotxn_pdata(txn, usb_protocol_data_t);
+
+    if (txn->length > dwc_get_max_transfer_size(hci_device, data->device_id, data->ep_address)) {
+        txn->ops->complete(txn, ERR_INVALID_ARGS, 0);
+    } else {
+        dwc_usb_t* dwc = dev_to_usb_dwc(hci_device);
+        do_dwc_iotxn_queue(dwc, txn);
+    }
 }
 
 static void dwc_unbind(mx_device_t* dev) {
@@ -746,6 +754,15 @@ mx_status_t dwc_reset_endpoint(mx_device_t* device, uint32_t device_id, uint8_t 
     return ERR_NOT_SUPPORTED;
 }
 
+size_t dwc_get_max_transfer_size(mx_device_t* device, uint32_t device_id, uint8_t ep_address) {
+    if (ep_address == 0) {
+        // control requests have uint16 length field
+        return UINT16_MAX;
+    }
+    // FIXME (gkalsi): what should we return here?
+    return 65536;
+}
+
 static usb_hci_protocol_t dwc_hci_protocol = {
     .set_bus_device = dwc_set_bus_device,
     .get_max_device_count = dwc_get_max_device_count,
@@ -755,6 +772,7 @@ static usb_hci_protocol_t dwc_hci_protocol = {
     .hub_device_added = dwc_hub_device_added,
     .hub_device_removed = dwc_hub_device_removed,
     .reset_endpoint = dwc_reset_endpoint,
+    .get_max_transfer_size = dwc_get_max_transfer_size,
 };
 
 static void dwc_handle_channel_irq(uint32_t channel, dwc_usb_t* dwc) {
