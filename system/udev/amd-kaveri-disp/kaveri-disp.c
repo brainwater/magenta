@@ -11,6 +11,7 @@
 
 #include <assert.h>
 #include <inttypes.h>
+#include <magenta/process.h>
 #include <magenta/syscalls.h>
 #include <magenta/types.h>
 #include <stdio.h>
@@ -91,6 +92,7 @@ static mx_protocol_device_t kaveri_disp_device_proto = {
 
 static mx_status_t kaveri_disp_bind(mx_driver_t* drv, mx_device_t* dev, void** cookie) {
     pci_protocol_t* pci;
+    mx_pci_resource_t pci_res;
     mx_status_t status;
 
     if (device_get_protocol(dev, MX_PROTOCOL_PCI, (void**)&pci))
@@ -105,23 +107,51 @@ static mx_status_t kaveri_disp_bind(mx_driver_t* drv, mx_device_t* dev, void** c
     if (!device)
         return ERR_NO_MEMORY;
 
-    // map register window
-    // seems to be bar 5
-    status = pci->map_mmio(dev, 5, MX_CACHE_POLICY_UNCACHED_DEVICE,
-                           &device->regs, &device->regs_size, &device->regs_handle);
+    // get the register window bar
+    status = pci->get_bar(dev, 5, &pci_res);
     if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d getting bar 5\n", status);
         goto fail;
     }
 
-    // map framebuffer window
-    // seems to be bar 0
-    status = pci->map_mmio(dev, 0, MX_CACHE_POLICY_WRITE_COMBINING,
-                           &device->framebuffer,
-                           &device->framebuffer_size,
-                           &device->framebuffer_handle);
+    status = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_UNCACHED_DEVICE);
     if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d setting bar 5 cache policy\n", status);
         goto fail;
     }
+
+    status = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE,
+            (uintptr_t*)&device->regs);
+    if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d mapping bar 5\n", status);
+        return status;
+    }
+    device->regs_size = pci_res.size;
+    device->regs_handle = pci_res.mmio_handle;
+
+    // get the framebuffer window bar
+    status = pci->get_bar(dev, 0, &pci_res);
+    if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d getting bar 0\n", status);
+        goto fail;
+    }
+
+    status = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_WRITE_COMBINING);
+    if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d setting bar 0 cache policy\n", status);
+        goto fail;
+    }
+
+    status = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE,
+            (uintptr_t*)&device->framebuffer);
+    if (status != NO_ERROR) {
+        printf("kaveri-disp: error %d mapping bar 0\n", status);
+        return status;
+    }
+    device->framebuffer_size = pci_res.size;
+    device->framebuffer_handle = pci_res.mmio_handle;
 
     // create and add the display (char) device
     device_init(&device->device, drv, "amd_kaveri_disp", &kaveri_disp_device_proto);
