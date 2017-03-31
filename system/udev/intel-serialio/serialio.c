@@ -8,6 +8,7 @@
 
 #include <magenta/listnode.h>
 
+#include <magenta/process.h>
 #include <magenta/syscalls.h>
 #include <magenta/types.h>
 
@@ -17,6 +18,7 @@
 
 static mx_status_t intel_serialio_bind(mx_driver_t* drv, mx_device_t* dev, void** cookie) {
     pci_protocol_t* pci;
+    mx_pci_resource_t pci_res;
     const pci_config_t* pci_config;
     mx_handle_t config_handle = MX_HANDLE_INVALID;
     mx_status_t res;
@@ -25,13 +27,24 @@ static mx_status_t intel_serialio_bind(mx_driver_t* drv, mx_device_t* dev, void*
         return ERR_INVALID_ARGS;
     }
 
-    if (device_get_protocol(dev, MX_PROTOCOL_PCI, (void**)&pci))
+    if (device_get_protocol(dev, MX_PROTOCOL_PCI, (void**)&pci)) {
         return ERR_NOT_SUPPORTED;
+    }
 
-    res = pci->get_config(dev, &pci_config, &config_handle);
+    // Get the device config
+    res = pci->get_config_vmo(dev, &pci_res);
     if (res != NO_ERROR) {
+        printf("serialio: error %d getting pci config\n", res);
         return res;
     }
+
+    res = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ, (uintptr_t*)&pci_config);
+    if (res != NO_ERROR) {
+        printf("serialio: error %d mapping pci config\n", res);
+        return res;
+    }
+    config_handle = pci_res.mmio_handle;
 
     switch (pci_config->device_id) {
     case INTEL_WILDCAT_POINT_SERIALIO_DMA_DID:
