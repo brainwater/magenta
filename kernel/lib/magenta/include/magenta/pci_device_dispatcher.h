@@ -75,12 +75,6 @@ public:
     const pcie_bar_info_t* GetBar(uint32_t bar_num);
     status_t GetConfig(pci_config_info_t* out);
     status_t ResetDevice();
-    status_t MapConfig(mxtl::RefPtr<Dispatcher>* out_mapping,
-                       mx_rights_t* out_rights);
-    status_t MapMmio(uint32_t bar_num,
-                     uint32_t cache_policy,
-                     mxtl::RefPtr<Dispatcher>* out_mapping,
-                     mx_rights_t* out_rights);
     status_t MapInterrupt(int32_t which_irq,
                           mxtl::RefPtr<Dispatcher>* interrupt_dispatcher,
                           mx_rights_t* rights);

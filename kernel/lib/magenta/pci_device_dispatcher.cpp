@@ -10,7 +10,6 @@
 #include <lib/user_copy.h>
 #include <magenta/pci_device_dispatcher.h>
 #include <magenta/pci_interrupt_dispatcher.h>
-#include <magenta/pci_io_mapping_dispatcher.h>
 #include <magenta/process_dispatcher.h>
 
 #include <assert.h>
@@ -168,49 +167,6 @@ status_t PciDeviceDispatcher::ResetDevice() {
     if (!device_->claimed()) return ERR_BAD_STATE;  // Are we not claimed yet?
 
     return device_->device()->DoFunctionLevelReset();
-}
-
-status_t PciDeviceDispatcher::MapConfig(mxtl::RefPtr<Dispatcher>* out_mapping,
-                                        mx_rights_t* out_rights) {
-    canary_.Assert();
-
-    AutoLock lock(&lock_);
-    return PciIoMappingDispatcher::Create(device_,
-                                         "cfg",
-                                          device_->device()->config_phys(),
-                                          PCIE_EXTENDED_CONFIG_SIZE,
-                                          0 /* vmm flags */,
-                                          ARCH_MMU_FLAG_UNCACHED_DEVICE |
-                                          ARCH_MMU_FLAG_PERM_READ       |
-                                          ARCH_MMU_FLAG_PERM_USER,
-                                          out_mapping,
-                                          out_rights);
-}
-
-status_t PciDeviceDispatcher::MapMmio(uint32_t bar_num,
-                                      uint32_t cache_policy,
-                                      mxtl::RefPtr<Dispatcher>* out_mapping,
-                                      mx_rights_t* out_rights) {
-    canary_.Assert();
-
-    AutoLock lock(&lock_);
-    DEBUG_ASSERT(device_ && device_->device());
-
-    if (!device_->claimed()) return ERR_BAD_STATE; // Are we not claimed yet?
-
-    status_t status;
-    status = PciIoMappingDispatcher::CreateBarMapping(device_,
-                                                     bar_num,
-                                                     0 /* vmm flags */,
-                                                     cache_policy,
-                                                     out_mapping,
-                                                     out_rights);
-
-    // If things went well, make sure that mmio is turned on
-    if (status == NO_ERROR)
-        device_->device()->EnableMmio(true);
-
-    return status;
 }
 
 status_t PciDeviceDispatcher::MapInterrupt(int32_t which_irq,
