@@ -15,6 +15,7 @@
 
 #include <magenta/compiler.h>
 #include <magenta/new.h>
+#include <magenta/process.h>
 #include <magenta/types.h>
 
 #include "block.h"
@@ -22,7 +23,7 @@
 #include "gpu.h"
 #include "trace.h"
 
-#define LOCAL_TRACE 0
+#define LOCAL_TRACE 1
 
 // implement driver object:
 
@@ -37,13 +38,23 @@ extern "C" mx_status_t virtio_bind(mx_driver_t* driver, mx_device_t* device, voi
         return -1;
     }
 
+    mx_pci_resource_t pci_res;
     const pci_config_t* config;
-    mx_handle_t config_handle = MX_HANDLE_INVALID;
-    status = pci->get_config(device, &config, &config_handle);
+
+    // Get the device config
+    status = pci->get_config_vmo(device, &pci_res);
     if (status != NO_ERROR) {
-        TRACEF("failed to grab config handle\n");
+        printf("virtio: error %d getting pci config\n", status);
         return status;
     }
+
+    status = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ, (uintptr_t*)&config);
+    if (status != NO_ERROR) {
+        printf("virtio: error %d mapping pci config\n", status);
+        return status;
+    }
+    mx_handle_t config_handle = pci_res.mmio_handle;
 
     LTRACEF("pci %p\n", pci);
     LTRACEF("0x%x:0x%x\n", config->vendor_id, config->device_id);

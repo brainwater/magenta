@@ -11,6 +11,7 @@
 
 #include <hexdump/hexdump.h>
 #include <hw/inout.h>
+#include <magenta/process.h>
 #include <mxtl/auto_lock.h>
 
 #include "trace.h"
@@ -40,6 +41,7 @@ mx_status_t Device::Bind(pci_protocol_t* pci,
     pci_ = pci;
     pci_config_handle_.reset(pci_config_handle);
     pci_config_ = pci_config;
+    mx_pci_resource_t pci_res;
 
     // detect if we're transitional or not
     if (pci_config_->device_id < 0x1040) {
@@ -97,14 +99,26 @@ mx_status_t Device::Bind(pci_protocol_t* pci,
             // map in the mmio space
             // XXX this seems to be broken right now
             uint64_t sz;
-            r = pci->map_mmio(bus_device_, 0, MX_CACHE_POLICY_UNCACHED_DEVICE,
-                              (void**)&bar0_mmio_base_, &sz, &tmp_handle);
+            r = pci->get_bar(bus_device_, 0, &pci_res);
             if (r != NO_ERROR) {
-                VIRTIO_ERROR("cannot mmap io %d\n", r);
+                VIRTIO_ERROR("virtio: error %d getting bar 4\n", r);
+                return r;;
+            }
+
+            r = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_UNCACHED_DEVICE);
+            if (r != NO_ERROR) {
+                VIRTIO_ERROR("virtio: error %d setting bar 0 cache policy\n", r);
+                return r;;
+            }
+
+            r = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+                    MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE,
+                    (uintptr_t*)&bar4_mmio_base_);
+            if (r != NO_ERROR) {
+                VIRTIO_ERROR("intel-i915: error %d mapping bar 0\n", r);
                 return r;
             }
-            bar0_mmio_handle_.reset(tmp_handle);
-
+            bar0_mmio_handle_.reset(pci_res.mmio_handle);
             LTRACEF("bar0_mmio_base_ %p, sz %#" PRIx64 "\n", bar0_mmio_base_, sz);
         } else {
             // this is probably PIO
@@ -146,13 +160,26 @@ mx_status_t Device::Bind(pci_protocol_t* pci,
 
         // map bar 4
         uint64_t sz;
-        r = pci->map_mmio(bus_device_, 4, MX_CACHE_POLICY_UNCACHED_DEVICE,
-                          (void**)&bar4_mmio_base_, &sz, &tmp_handle);
+        r = pci->get_bar(bus_device_, 4, &pci_res);
         if (r != NO_ERROR) {
-            VIRTIO_ERROR("cannot map io %d\n", bar4_mmio_handle_.get());
+            VIRTIO_ERROR("virtio: error %d getting bar 4\n", r);
+            return r;;
+        }
+
+        r = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_UNCACHED_DEVICE);
+        if (r != NO_ERROR) {
+            VIRTIO_ERROR("virtio: error %d setting bar 4 cache policy\n", r);
+            return r;;
+        }
+
+        r = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+                MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE,
+                (uintptr_t*)&bar4_mmio_base_);
+        if (r != NO_ERROR) {
+            VIRTIO_ERROR("intel-i915: error %d mapping bar 4\n", r);
             return r;
         }
-        bar4_mmio_handle_.reset(tmp_handle);
+        bar4_mmio_handle_.reset(pci_res.mmio_handle);
         LTRACEF("bar4_mmio_base_ %p, sz %#" PRIx64 "\n", bar4_mmio_base_, sz);
 
         // set up the mmio registers
