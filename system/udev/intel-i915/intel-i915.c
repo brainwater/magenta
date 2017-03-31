@@ -10,6 +10,7 @@
 #include <hw/pci.h>
 
 #include <assert.h>
+#include <magenta/process.h>
 #include <magenta/syscalls.h>
 #include <magenta/types.h>
 #include <stdio.h>
@@ -144,32 +145,74 @@ static mx_status_t intel_i915_bind(mx_driver_t* drv, mx_device_t* dev, void** co
     if (!device)
         return ERR_NO_MEMORY;
 
+    mx_pci_resource_t pci_res;
     const pci_config_t* pci_config;
-    mx_handle_t cfg_handle = MX_HANDLE_INVALID;
-    status = pci->get_config(dev, &pci_config, &cfg_handle);
-    if (status == NO_ERROR) {
-        if (pci_config->device_id == INTEL_I915_BROADWELL_DID) {
-            // TODO: this should be based on the specific target
-            device->flags |= FLAGS_BACKLIGHT;
-        }
-        mx_handle_close(cfg_handle);
-    }
 
-    // map register window
-    status = pci->map_mmio(dev, 0, MX_CACHE_POLICY_UNCACHED_DEVICE,
-                           &device->regs, &device->regs_size, &device->regs_handle);
+    // Get the device config
+    status = pci->get_config_vmo(dev, &pci_res);
     if (status != NO_ERROR) {
+        printf("intel-i915: error %d getting pci config\n", status);
         goto fail;
     }
 
-    // map framebuffer window
-    status = pci->map_mmio(dev, 2, MX_CACHE_POLICY_WRITE_COMBINING,
-                           &device->framebuffer,
-                           &device->framebuffer_size,
-                           &device->framebuffer_handle);
+    status = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ, (uintptr_t*)&pci_config);
     if (status != NO_ERROR) {
+        printf("intel-i915: error %d mapping pci config\n", status);
         goto fail;
     }
+    printf("intel-i915: bound to %04x:%04x\n", pci_config->vendor_id, pci_config->device_id);
+
+    if (pci_config->device_id == INTEL_I915_BROADWELL_DID) {
+        // TODO: this should be based on the specific target
+        device->flags |= FLAGS_BACKLIGHT;
+    }
+
+    // get the register bar
+    status = pci->get_bar(dev, 0, &pci_res);
+    if (status != NO_ERROR) {
+        printf("intel-i915: error %d getting bar 0\n", status);
+        goto fail;
+    }
+
+    status = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_UNCACHED_DEVICE);
+    if (status != NO_ERROR) {
+        printf("intel-i915: error %d setting bar 0 cache policy\n", status);
+        goto fail;
+    }
+
+    status = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE,
+            (uintptr_t*)&device->regs);
+    if (status != NO_ERROR) {
+        printf("intel-i915: error %d mapping bar 0\n", status);
+        return status;
+    }
+    device->regs_size = pci_res.size;
+    device->regs_handle = pci_res.mmio_handle;
+
+    // get the framebuffer bar
+    status = pci->get_bar(dev, 2, &pci_res);
+    if (status != NO_ERROR) {
+        printf("intel-i915: error %d getting bar 2\n", status);
+        goto fail;
+    }
+
+    status = mx_vmo_set_cache_policy(pci_res.mmio_handle, MX_CACHE_POLICY_WRITE_COMBINING);
+    if (status != NO_ERROR) {
+        printf("intel-i915: error %d setting bar 2 cache policy\n", status);
+        goto fail;
+    }
+
+    status = mx_vmar_map(mx_vmar_root_self(), 0, pci_res.mmio_handle, 0, pci_res.size,
+            MX_VM_FLAG_PERM_READ | MX_VM_FLAG_PERM_WRITE | MX_VM_FLAG_MAP_RANGE,
+            (uintptr_t*)&device->framebuffer);
+    if (status != NO_ERROR) {
+        printf("intel-i915: error %d mapping bar 2\n", status);
+        return status;
+    }
+    device->framebuffer_size = pci_res.size;
+    device->framebuffer_handle = pci_res.mmio_handle;
 
     // create and add the display (char) device
     device_init(&device->device, drv, "intel_i915_disp", &intel_i915_device_proto);
